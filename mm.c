@@ -10,6 +10,7 @@
  * comment that gives a high level description of your solution.
  */
 #include <assert.h>
+#include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -42,17 +43,105 @@ team_t team = {
 
 #define SIZE_T_SIZE (ALIGN(sizeof(size_t)))
 
+#define WSIZE 4
+#define DSIZE 8
+#define BSIZE 16
+
+#define MAX(x, y) ((x) > (y) ? (x) : (y))
+
+// about size and type of block
+#define PACK(size, alloc) ((size) | (alloc))
+
+#define GET(p) (*(unsigned int *)(p))
+#define PUT(p, val) (*(unsigned int *)(p) = (unsigned int)(val))
+
+#define GET_SIZE(p) (GET(p) & ~0x7)
+#define GET_ALLOC(p) (GET(p) & 0x1)
+
+// about block
+#define HDRP(bp) ((void *)(bp)-WSIZE)
+#define FTPR(bp) ((void *)(bp) + GET_SIZE(HDRP(bp)) - DSIZE)
+
+#define PREV_BLKP(bp) ((void *)(bp)-GET_SIZE(((void *)(bp)-DSIZE)))
+#define NEXT_BLKP(bp) ((void *)(bp) + GET_SIZE(((void *)(bp)-WSIZE)))
+
+#define CLASS_N 8
+#define CLASS_SIZE(idx) (1 << (idx + 4))
+
+// about linked list node
+#define PREV(bp) ((void *)(bp))
+#define NEXT(bp) ((void *)(bp) + 1)
+
+#define PREV_NODE_BP(bp) (*(void **)(bp))
+#define NEXT_NODE_BP(bp) (*((void **)(bp) + 1))
+
+static void *class_start[CLASS_N];
+static void *NIL[2] = {NULL, NULL};
+static void *heap_start, *heap_end;
+
+enum BlockType { FREE, ALLOC };
+
 /*
  * mm_init - initialize the malloc package.
  */
-int mm_init(void) { return 0; }
+int mm_init(void) {
+	for (int i = 0; i < CLASS_N; ++i) {
+		class_start[i] = NIL;
+	}
+	if ((heap_start = mem_sbrk(4 * WSIZE)) == (void *)-1)
+		return -1;
+	PUT(heap_start, 0);
+	PUT(heap_start + (1 * WSIZE), PACK(DSIZE, ALLOC));
+	PUT(heap_start + (2 * WSIZE), PACK(DSIZE, ALLOC));
+	PUT(heap_start + (3 * WSIZE), PACK(0, FREE));
+	heap_end = heap_start + (4 * WSIZE);
+
+	return 0;
+}
 
 /*
  * mm_malloc - Allocate a block by incrementing the brk pointer.
  *     Always allocate a block whose size is a multiple of the alignment.
  */
+void *_find_match_bp(size_t size) {
+	void *cur_bp;
+	for (int i = 0; i < CLASS_N; ++i) {
+		if (i != CLASS_N - 1 && size > CLASS_SIZE(i)) {
+			continue;
+		}
+		cur_bp = class_start[i];
+		while (cur_bp != NIL) {
+			if (GET_SIZE(HDRP(cur_bp)) >= size) {
+				return cur_bp;
+			}
+			cur_bp = NEXT_NODE_BP(cur_bp);
+		}
+	}
+
+	return NULL;
+}
+
 void *mm_malloc(size_t size) {
-	int newsize = ALIGN(size + SIZE_T_SIZE);
+	int newsize = ALIGN(size + DSIZE);
+	bool found = false;
+	void *cur_bp;
+	if (newsize < BSIZE) {
+		newsize = BSIZE;
+	}
+
+	cur_bp = _finde_match_bp(newsize);
+
+	if (cur_bp) {
+		int restsize = GET_SIZE(HDRP(cur_bp)) - newsize;
+		if (restsize < BSIZE) {
+			newsize = GET_SIZE(HDRP(cur_bp));
+			restsize = 0;
+		}
+
+	} else {
+	}
+
+	// if freed, new one should start from that part
 	void *p = mem_sbrk(newsize);
 	if (p == (void *)-1)
 		return NULL;
