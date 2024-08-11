@@ -35,6 +35,17 @@ team_t team = {
 	/* Second member's email address (leave blank if none) */
 	""};
 
+typedef enum _BlockType { FREE, ALLOC } BlockType;
+
+typedef struct _node {
+	struct _node *prev;
+	struct _node *next;
+} node;
+
+void *_find_match_bp(size_t);
+void set_block_size(void *, size_t, BlockType);
+void add_new_free_block(void *, size_t);
+
 /* single word (4) or double word (8) alignment */
 #define ALIGNMENT 8
 
@@ -69,27 +80,24 @@ team_t team = {
 #define CLASS_SIZE(idx) (1 << (idx + 4))
 
 // about linked list node
-#define PREV(bp) ((void *)(bp))
-#define NEXT(bp) ((void *)(bp) + 1)
+#define PREV(bp) (((node *)(bp))->prev)
+#define NEXT(bp) (((node *)(bp))->next)
 
-#define PREV_NODE_BP(bp) (*(void **)(bp))
-#define NEXT_NODE_BP(bp) (*((void **)(bp) + 1))
-
-static void *class_start[CLASS_N];
-static void *NIL[2] = {NULL, NULL};
+static node class_start[CLASS_N];
+static node _NIL = {NULL, NULL};
+static node *NIL = &_NIL;
 static void *heap_start, *heap_end;
-
-enum BlockType { FREE, ALLOC };
 
 /*
  * mm_init - initialize the malloc package.
  */
 int mm_init(void) {
 	for (int i = 0; i < CLASS_N; ++i) {
-		class_start[i] = NIL;
+		class_start[i].next = NIL;
 	}
-	if ((heap_start = mem_sbrk(4 * WSIZE)) == (void *)-1)
+	if ((heap_start = mem_sbrk(4 * WSIZE)) == (void *)-1) {
 		return -1;
+	}
 	PUT(heap_start, 0);
 	PUT(heap_start + (1 * WSIZE), PACK(DSIZE, ALLOC));
 	PUT(heap_start + (2 * WSIZE), PACK(DSIZE, ALLOC));
@@ -103,52 +111,55 @@ int mm_init(void) {
  * mm_malloc - Allocate a block by incrementing the brk pointer.
  *     Always allocate a block whose size is a multiple of the alignment.
  */
-void *_find_match_bp(size_t size) {
-	void *cur_bp;
-	for (int i = 0; i < CLASS_N; ++i) {
-		if (i != CLASS_N - 1 && size > CLASS_SIZE(i)) {
-			continue;
-		}
-		cur_bp = class_start[i];
-		while (cur_bp != NIL) {
-			if (GET_SIZE(HDRP(cur_bp)) >= size) {
-				return cur_bp;
-			}
-			cur_bp = NEXT_NODE_BP(cur_bp);
-		}
-	}
-
-	return NULL;
-}
-
 void *mm_malloc(size_t size) {
-	int newsize = ALIGN(size + DSIZE);
-	bool found = false;
+	size_t newsize = ALIGN(size + DSIZE), temp_size;
 	void *cur_bp;
+	node *prev_node, *next_node;
 	if (newsize < BSIZE) {
 		newsize = BSIZE;
 	}
 
-	cur_bp = _finde_match_bp(newsize);
+	cur_bp = _find_match_bp(newsize);
 
 	if (cur_bp) {
-		int restsize = GET_SIZE(HDRP(cur_bp)) - newsize;
-		if (restsize < BSIZE) {
+		temp_size = GET_SIZE(HDRP(cur_bp)) - newsize;
+		if (temp_size < BSIZE) {
 			newsize = GET_SIZE(HDRP(cur_bp));
-			restsize = 0;
+			temp_size = 0;
 		}
-
+		prev_node = PREV(cur_bp);
+		next_node = NEXT(cur_bp);
+		prev_node->next = next_node;
+		next_node->prev = prev_node;
+		set_block_size(cur_bp, newsize, ALLOC);
+		if (temp_size) {
+			void *new_free_bp = cur_bp + newsize;
+			set_block_size(new_free_bp, temp_size, FREE);
+			add_new_free_block(new_free_bp, temp_size);
+		}
 	} else {
+		cur_bp = heap_end;
+		if (GET_ALLOC(cur_bp - DSIZE)) {
+			if (mem_sbrk(newsize) == (void *)-1) {
+				return NULL;
+			}
+			heap_end += newsize;
+		} else {
+			temp_size = GET_SIZE(cur_bp - DSIZE);
+			assert(newsize > temp_size);
+			cur_bp -= temp_size;
+			prev_node = PREV(cur_bp);
+			next_node = NEXT(cur_bp);
+			prev_node->next = next_node;
+			next_node->prev = prev_node;
+			if (mem_sbrk(newsize - temp_size) == (void *)-1) {
+				return NULL;
+			}
+			heap_end += (newsize - temp_size);
+		}
+		set_block_size(cur_bp, newsize, ALLOC);
 	}
-
-	// if freed, new one should start from that part
-	void *p = mem_sbrk(newsize);
-	if (p == (void *)-1)
-		return NULL;
-	else {
-		*(size_t *)p = size;
-		return (void *)((char *)p + SIZE_T_SIZE);
-	}
+	return cur_bp;
 }
 
 /*
@@ -173,4 +184,43 @@ void *mm_realloc(void *ptr, size_t size) {
 	memcpy(newptr, oldptr, copySize);
 	mm_free(oldptr);
 	return newptr;
+}
+
+void *_find_match_bp(size_t size) {
+	node *cur_bp;
+	for (int i = 0; i < CLASS_N; ++i) {
+		if (i != CLASS_N - 1 && size > CLASS_SIZE(i)) {
+			continue;
+		}
+		cur_bp = (class_start + i)->next;
+		while (cur_bp != NIL) {
+			if (GET_SIZE(HDRP(cur_bp)) >= size) {
+				return cur_bp;
+			}
+			cur_bp = NEXT(cur_bp);
+		}
+	}
+
+	return NULL;
+}
+
+void set_block_size(void *bp, size_t size, BlockType type) {
+	PUT(HDRP(bp), PACK(size, type));
+	PUT(FTPR(bp), PACK(size, type));
+}
+
+void add_new_free_block(void *bp, size_t size) {
+	node *cur_bp = (node *)bp;
+	int idx = 0;
+	for (; idx < CLASS_N; ++idx) {
+		if (size <= CLASS_SIZE(idx)) {
+			break;
+		}
+	}
+	node *head_node = class_start + idx;
+	node *next_node = head_node->next;
+	head_node->next = cur_bp;
+	next_node->prev = cur_bp;
+	cur_bp->prev = head_node;
+	cur_bp->next = next_node;
 }
