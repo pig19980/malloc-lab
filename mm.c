@@ -42,9 +42,11 @@ typedef struct _node {
 	struct _node *next;
 } node;
 
-void *_find_match_bp(size_t);
+void *find_match_bp(size_t);
 void set_block_size(void *, size_t, BlockType);
 void add_new_free_block(void *, size_t);
+void erase_node(void *);
+void mem_check();
 
 /* single word (4) or double word (8) alignment */
 #define ALIGNMENT 8
@@ -76,7 +78,7 @@ void add_new_free_block(void *, size_t);
 #define PREV_BLKP(bp) ((void *)(bp)-GET_SIZE(((void *)(bp)-DSIZE)))
 #define NEXT_BLKP(bp) ((void *)(bp) + GET_SIZE(((void *)(bp)-WSIZE)))
 
-#define CLASS_N 8
+#define CLASS_N 10
 #define CLASS_SIZE(idx) (1 << (idx + 4))
 
 // about linked list node
@@ -102,7 +104,10 @@ int mm_init(void) {
 	PUT(heap_start + (1 * WSIZE), PACK(DSIZE, ALLOC));
 	PUT(heap_start + (2 * WSIZE), PACK(DSIZE, ALLOC));
 	PUT(heap_start + (3 * WSIZE), PACK(0, FREE));
-	heap_end = heap_start + (4 * WSIZE);
+	heap_start += (2 * WSIZE);
+	heap_end = heap_start + (2 * WSIZE);
+
+	printf("\ninit end\n");
 
 	return 0;
 }
@@ -114,12 +119,11 @@ int mm_init(void) {
 void *mm_malloc(size_t size) {
 	size_t newsize = ALIGN(size + DSIZE), temp_size;
 	void *cur_bp;
-	node *prev_node, *next_node;
 	if (newsize < BSIZE) {
 		newsize = BSIZE;
 	}
 
-	cur_bp = _find_match_bp(newsize);
+	cur_bp = find_match_bp(newsize);
 
 	if (cur_bp) {
 		temp_size = GET_SIZE(HDRP(cur_bp)) - newsize;
@@ -127,10 +131,7 @@ void *mm_malloc(size_t size) {
 			newsize = GET_SIZE(HDRP(cur_bp));
 			temp_size = 0;
 		}
-		prev_node = PREV(cur_bp);
-		next_node = NEXT(cur_bp);
-		prev_node->next = next_node;
-		next_node->prev = prev_node;
+		erase_node(cur_bp);
 		set_block_size(cur_bp, newsize, ALLOC);
 		if (temp_size) {
 			void *new_free_bp = cur_bp + newsize;
@@ -148,10 +149,7 @@ void *mm_malloc(size_t size) {
 			temp_size = GET_SIZE(cur_bp - DSIZE);
 			assert(newsize > temp_size);
 			cur_bp -= temp_size;
-			prev_node = PREV(cur_bp);
-			next_node = NEXT(cur_bp);
-			prev_node->next = next_node;
-			next_node->prev = prev_node;
+			erase_node(cur_bp);
 			if (mem_sbrk(newsize - temp_size) == (void *)-1) {
 				return NULL;
 			}
@@ -159,13 +157,39 @@ void *mm_malloc(size_t size) {
 		}
 		set_block_size(cur_bp, newsize, ALLOC);
 	}
+	printf("got malloc %d\n", size);
+	mem_check();
 	return cur_bp;
 }
 
 /*
  * mm_free - Freeing a block does nothing.
  */
-void mm_free(void *ptr) {}
+void mm_free(void *ptr) {
+	assert(GET_SIZE(HDRP(ptr)) == GET_SIZE(FTPR(ptr)));
+	assert(GET_ALLOC(HDRP(ptr)) == ALLOC);
+	assert(GET_ALLOC(HDRP(ptr)) == GET_ALLOC(FTPR(ptr)));
+	void *temp_bp, *free_bp;
+	size_t free_size = GET_SIZE(HDRP(ptr));
+	free_bp = ptr;
+	if (ptr - DSIZE > heap_start && !GET_ALLOC(ptr - DSIZE)) {
+		temp_bp = ptr - GET_SIZE(ptr - DSIZE);
+		erase_node(temp_bp);
+		free_bp = temp_bp;
+		free_size += GET_SIZE(HDRP(temp_bp));
+	}
+	if (ptr + GET_SIZE(HDRP(ptr)) < heap_end &&
+		!GET_ALLOC(HDRP(ptr + GET_SIZE(HDRP(ptr))))) {
+		temp_bp = ptr + GET_SIZE(HDRP(ptr));
+		erase_node(temp_bp);
+		free_size += GET_SIZE(HDRP(temp_bp));
+	}
+	set_block_size(free_bp, free_size, FREE);
+	add_new_free_block(free_bp, free_size);
+
+	printf("got free\n");
+	mem_check();
+}
 
 /*
  * mm_realloc - Implemented simply in terms of mm_malloc and mm_free
@@ -186,7 +210,7 @@ void *mm_realloc(void *ptr, size_t size) {
 	return newptr;
 }
 
-void *_find_match_bp(size_t size) {
+void *find_match_bp(size_t size) {
 	node *cur_bp;
 	for (int i = 0; i < CLASS_N; ++i) {
 		if (i != CLASS_N - 1 && size > CLASS_SIZE(i)) {
@@ -204,6 +228,11 @@ void *_find_match_bp(size_t size) {
 	return NULL;
 }
 
+void erase_node(void *bp) {
+	PREV(bp)->next = NEXT(bp);
+	NEXT(bp)->prev = PREV(bp);
+}
+
 void set_block_size(void *bp, size_t size, BlockType type) {
 	PUT(HDRP(bp), PACK(size, type));
 	PUT(FTPR(bp), PACK(size, type));
@@ -212,7 +241,7 @@ void set_block_size(void *bp, size_t size, BlockType type) {
 void add_new_free_block(void *bp, size_t size) {
 	node *cur_bp = (node *)bp;
 	int idx = 0;
-	for (; idx < CLASS_N; ++idx) {
+	for (; idx < CLASS_N - 1; ++idx) {
 		if (size <= CLASS_SIZE(idx)) {
 			break;
 		}
@@ -223,4 +252,29 @@ void add_new_free_block(void *bp, size_t size) {
 	next_node->prev = cur_bp;
 	cur_bp->prev = head_node;
 	cur_bp->next = next_node;
+}
+
+void mem_check() {
+	void *cur_bp = heap_start;
+	node *cur_node;
+
+	printf("block check\n");
+	while (cur_bp != heap_end) {
+		assert(GET(HDRP(cur_bp)) == GET(FTPR(cur_bp)));
+		printf("%d %d %d\n", cur_bp - heap_start, GET_SIZE(HDRP(cur_bp)),
+			   GET_ALLOC(HDRP(cur_bp)));
+		cur_bp += GET_SIZE(HDRP(cur_bp));
+	}
+	printf("free check\n");
+	for (int i = 0; i < CLASS_N; ++i) {
+		printf("class %d min_size %d\n", i, CLASS_SIZE(i));
+		cur_node = (class_start + i)->next;
+		while (cur_node != NIL) {
+			printf("%d %d %d\n", (void *)cur_node - heap_start,
+				   GET_SIZE(HDRP(cur_node)), GET_ALLOC(HDRP(cur_node)));
+			cur_node = cur_node->next;
+		}
+	}
+
+	printf("\n");
 }
