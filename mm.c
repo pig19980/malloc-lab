@@ -107,7 +107,7 @@ int mm_init(void) {
 	heap_start += (2 * WSIZE);
 	heap_end = heap_start + (2 * WSIZE);
 
-	printf("\ninit end\n");
+	// printf("\ninit end\n");
 
 	return 0;
 }
@@ -117,48 +117,51 @@ int mm_init(void) {
  *     Always allocate a block whose size is a multiple of the alignment.
  */
 void *mm_malloc(size_t size) {
-	size_t newsize = ALIGN(size + DSIZE), temp_size;
+	size_t new_size, left_size, rest_size;
 	void *cur_bp;
-	if (newsize < BSIZE) {
-		newsize = BSIZE;
+	new_size = ALIGN(size + DSIZE);
+	if (new_size < BSIZE) {
+		new_size = BSIZE;
 	}
 
-	cur_bp = find_match_bp(newsize);
+	cur_bp = find_match_bp(new_size);
 
 	if (cur_bp) {
-		temp_size = GET_SIZE(HDRP(cur_bp)) - newsize;
-		if (temp_size < BSIZE) {
-			newsize = GET_SIZE(HDRP(cur_bp));
-			temp_size = 0;
+		// printf("malloc found empty\n");
+		rest_size = GET_SIZE(HDRP(cur_bp)) - new_size;
+		if (rest_size < BSIZE) {
+			new_size = GET_SIZE(HDRP(cur_bp));
+			rest_size = 0;
 		}
+		// printf("%d %d\n", new_size, temp_size);
 		erase_node(cur_bp);
-		set_block_size(cur_bp, newsize, ALLOC);
-		if (temp_size) {
-			void *new_free_bp = cur_bp + newsize;
-			set_block_size(new_free_bp, temp_size, FREE);
-			add_new_free_block(new_free_bp, temp_size);
+		set_block_size(cur_bp, new_size, ALLOC);
+		if (rest_size) {
+			void *new_free_bp = cur_bp + new_size;
+			set_block_size(new_free_bp, rest_size, FREE);
+			add_new_free_block(new_free_bp, rest_size);
 		}
 	} else {
 		cur_bp = heap_end;
 		if (GET_ALLOC(cur_bp - DSIZE)) {
-			if (mem_sbrk(newsize) == (void *)-1) {
+			if (mem_sbrk(new_size) == (void *)-1) {
 				return NULL;
 			}
-			heap_end += newsize;
+			heap_end += new_size;
 		} else {
-			temp_size = GET_SIZE(cur_bp - DSIZE);
-			assert(newsize > temp_size);
-			cur_bp -= temp_size;
+			left_size = GET_SIZE(cur_bp - DSIZE);
+			assert(new_size > left_size);
+			cur_bp -= left_size;
 			erase_node(cur_bp);
-			if (mem_sbrk(newsize - temp_size) == (void *)-1) {
+			if (mem_sbrk(new_size - left_size) == (void *)-1) {
 				return NULL;
 			}
-			heap_end += (newsize - temp_size);
+			heap_end += (new_size - left_size);
 		}
-		set_block_size(cur_bp, newsize, ALLOC);
+		set_block_size(cur_bp, new_size, ALLOC);
 	}
-	printf("got malloc %d\n", size);
-	mem_check();
+	// printf("got malloc %d\n", size);
+	// mem_check();
 	return cur_bp;
 }
 
@@ -187,33 +190,83 @@ void mm_free(void *ptr) {
 	set_block_size(free_bp, free_size, FREE);
 	add_new_free_block(free_bp, free_size);
 
-	printf("got free\n");
-	mem_check();
+	// printf("got free\n");
+	// mem_check();
 }
 
 /*
  * mm_realloc - Implemented simply in terms of mm_malloc and mm_free
  */
-void *mm_realloc(void *ptr, size_t size) {
-	void *oldptr = ptr;
-	void *newptr;
-	size_t copySize;
-
-	newptr = mm_malloc(size);
-	if (newptr == NULL)
+void *mm_realloc(void *old_bp, size_t size) {
+	void *new_bp, *rest_bp, *temp_bp;
+	size_t copy_size, old_size, rest_size, temp_size;
+	if (old_bp == NULL) {
+		return mm_malloc(size);
+	}
+	if (size == 0) {
+		mm_free(old_bp);
 		return NULL;
-	copySize = *(size_t *)((char *)oldptr - SIZE_T_SIZE);
-	if (size < copySize)
-		copySize = size;
-	memcpy(newptr, oldptr, copySize);
-	mm_free(oldptr);
-	return newptr;
+	}
+
+	old_size = GET_SIZE(HDRP(old_bp));
+	copy_size = ALIGN(size + DSIZE);
+	if (old_size == copy_size) {
+		return old_bp;
+	} else if (old_size > copy_size) {
+		rest_size = old_size - copy_size;
+		if (rest_size < BSIZE) {
+			return old_bp;
+		}
+		rest_bp = old_bp + copy_size;
+		set_block_size(old_bp, copy_size, ALLOC);
+		// for the case when right block of new_bp if free block
+		set_block_size(rest_bp, rest_size, ALLOC);
+		mm_free(rest_bp);
+		return old_bp;
+	}
+
+	temp_bp = NEXT_BLKP(old_bp);
+	if (temp_bp == heap_end) {
+		if (mem_sbrk(copy_size - old_size) == (void *)-1) {
+			return NULL;
+		}
+		heap_end += (copy_size - old_size);
+		set_block_size(old_bp, copy_size, ALLOC);
+		return old_bp;
+	} else if (!GET_ALLOC(HDRP(temp_bp))) {
+		temp_size = GET_SIZE(HDRP(temp_bp));
+		if (old_size + temp_size >= copy_size ||
+			NEXT_BLKP(temp_bp) == heap_end) {
+			erase_node(temp_bp);
+			set_block_size(old_bp, old_size + temp_size, ALLOC);
+			return mm_realloc(old_bp, size);
+		}
+	}
+	// temp_bp = old_bp;
+	// temp_size = old_size;
+	// if (old_bp - DSIZE > heap_start && !GET_ALLOC(old_bp - DSIZE)) {
+	// 	temp_bp = old_bp - GET_SIZE(old_bp - DSIZE);
+	// 	temp_size += GET_SIZE(old_bp - DSIZE);
+	// }
+	// if (old_bp + GET_SIZE(HDRP(old_bp)) < heap_end &&
+	// 	!GET_ALLOC(HDRP(old_bp) + old_size)) {
+	// 	temp_size += GET_SIZE(HDRP(old_bp) + old_size);
+	// }
+	// if (temp_size >= copy_size) {
+	// 	memcpy(temp_bp, old_bp, old_size - DSIZE);
+	// }
+
+	new_bp = mm_malloc(size);
+	memcpy(new_bp, old_bp, old_size - DSIZE);
+	mm_free(old_bp);
+
+	return new_bp;
 }
 
 void *find_match_bp(size_t size) {
 	node *cur_bp;
 	for (int i = 0; i < CLASS_N; ++i) {
-		if (i != CLASS_N - 1 && size > CLASS_SIZE(i)) {
+		if (i != CLASS_N - 1 && size >= CLASS_SIZE(i + 1)) {
 			continue;
 		}
 		cur_bp = (class_start + i)->next;
@@ -242,10 +295,11 @@ void add_new_free_block(void *bp, size_t size) {
 	node *cur_bp = (node *)bp;
 	int idx = 0;
 	for (; idx < CLASS_N - 1; ++idx) {
-		if (size <= CLASS_SIZE(idx)) {
+		if (size < CLASS_SIZE(idx + 1)) {
 			break;
 		}
 	}
+	// printf("add new free size %d class %d\n", size, idx);
 	node *head_node = class_start + idx;
 	node *next_node = head_node->next;
 	head_node->next = cur_bp;
@@ -264,6 +318,7 @@ void mem_check() {
 		printf("%d %d %d\n", cur_bp - heap_start, GET_SIZE(HDRP(cur_bp)),
 			   GET_ALLOC(HDRP(cur_bp)));
 		cur_bp += GET_SIZE(HDRP(cur_bp));
+		assert(cur_bp <= heap_end);
 	}
 	printf("free check\n");
 	for (int i = 0; i < CLASS_N; ++i) {
@@ -275,6 +330,4 @@ void mem_check() {
 			cur_node = cur_node->next;
 		}
 	}
-
-	printf("\n");
 }
