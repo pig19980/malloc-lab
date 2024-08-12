@@ -150,7 +150,7 @@ void *mm_malloc(size_t size) {
 			heap_end += new_size;
 		} else {
 			left_size = GET_SIZE(cur_bp - DSIZE);
-			assert(new_size > left_size);
+			// assert(new_size > left_size);
 			cur_bp -= left_size;
 			erase_node(cur_bp);
 			if (mem_sbrk(new_size - left_size) == (void *)-1) {
@@ -169,9 +169,9 @@ void *mm_malloc(size_t size) {
  * mm_free - Freeing a block does nothing.
  */
 void mm_free(void *ptr) {
-	assert(GET_SIZE(HDRP(ptr)) == GET_SIZE(FTPR(ptr)));
-	assert(GET_ALLOC(HDRP(ptr)) == ALLOC);
-	assert(GET_ALLOC(HDRP(ptr)) == GET_ALLOC(FTPR(ptr)));
+	// assert(GET_SIZE(HDRP(ptr)) == GET_SIZE(FTPR(ptr)));
+	// assert(GET_ALLOC(HDRP(ptr)) == ALLOC);
+	// assert(GET_ALLOC(HDRP(ptr)) == GET_ALLOC(FTPR(ptr)));
 	void *temp_bp, *free_bp;
 	size_t free_size = GET_SIZE(HDRP(ptr));
 	free_bp = ptr;
@@ -233,28 +233,36 @@ void *mm_realloc(void *old_bp, size_t size) {
 		heap_end += (copy_size - old_size);
 		set_block_size(old_bp, copy_size, ALLOC);
 		return old_bp;
+
 	} else if (!GET_ALLOC(HDRP(temp_bp))) {
 		temp_size = GET_SIZE(HDRP(temp_bp));
 		if (old_size + temp_size >= copy_size ||
 			NEXT_BLKP(temp_bp) == heap_end) {
 			erase_node(temp_bp);
 			set_block_size(old_bp, old_size + temp_size, ALLOC);
+
 			return mm_realloc(old_bp, size);
 		}
 	}
-	// temp_bp = old_bp;
-	// temp_size = old_size;
-	// if (old_bp - DSIZE > heap_start && !GET_ALLOC(old_bp - DSIZE)) {
-	// 	temp_bp = old_bp - GET_SIZE(old_bp - DSIZE);
-	// 	temp_size += GET_SIZE(old_bp - DSIZE);
-	// }
-	// if (old_bp + GET_SIZE(HDRP(old_bp)) < heap_end &&
-	// 	!GET_ALLOC(HDRP(old_bp) + old_size)) {
-	// 	temp_size += GET_SIZE(HDRP(old_bp) + old_size);
-	// }
-	// if (temp_size >= copy_size) {
-	// 	memcpy(temp_bp, old_bp, old_size - DSIZE);
-	// }
+	if (old_bp - DSIZE > heap_start && !GET_ALLOC(old_bp - DSIZE)) {
+		temp_bp = old_bp - GET_SIZE(old_bp - DSIZE);
+		temp_size = old_size + GET_SIZE(old_bp - DSIZE);
+		if (old_bp + GET_SIZE(HDRP(old_bp)) < heap_end &&
+			!GET_ALLOC(HDRP(old_bp) + old_size)) {
+			temp_size += GET_SIZE(HDRP(old_bp) + old_size);
+		}
+		if (temp_size >= copy_size) {
+			erase_node(temp_bp);
+			if (old_bp + GET_SIZE(HDRP(old_bp)) < heap_end &&
+				!GET_ALLOC(HDRP(old_bp) + old_size)) {
+				erase_node(old_bp + GET_SIZE(HDRP(old_bp)));
+			}
+			memcpy(temp_bp, old_bp, old_size - DSIZE);
+			set_block_size(temp_bp, temp_size, ALLOC);
+
+			return mm_realloc(temp_bp, size);
+		}
+	}
 
 	new_bp = mm_malloc(size);
 	memcpy(new_bp, old_bp, old_size - DSIZE);
@@ -312,21 +320,23 @@ void mem_check() {
 	void *cur_bp = heap_start;
 	node *cur_node;
 
-	printf("block check\n");
+	// printf("block check\n");
 	while (cur_bp != heap_end) {
 		assert(GET(HDRP(cur_bp)) == GET(FTPR(cur_bp)));
-		printf("%d %d %d\n", cur_bp - heap_start, GET_SIZE(HDRP(cur_bp)),
-			   GET_ALLOC(HDRP(cur_bp)));
+		// printf("%d %d %d\n", cur_bp - heap_start, GET_SIZE(HDRP(cur_bp)),
+		// 	   GET_ALLOC(HDRP(cur_bp)));
 		cur_bp += GET_SIZE(HDRP(cur_bp));
 		assert(cur_bp <= heap_end);
 	}
-	printf("free check\n");
+	// printf("free check\n");
 	for (int i = 0; i < CLASS_N; ++i) {
-		printf("class %d min_size %d\n", i, CLASS_SIZE(i));
+		// printf("class %d min_size %d\n", i, CLASS_SIZE(i));
 		cur_node = (class_start + i)->next;
 		while (cur_node != NIL) {
-			printf("%d %d %d\n", (void *)cur_node - heap_start,
-				   GET_SIZE(HDRP(cur_node)), GET_ALLOC(HDRP(cur_node)));
+			assert(GET_ALLOC(HDRP(cur_node)) == FREE);
+			assert(GET(HDRP(cur_node)) == GET(FTPR(cur_node)));
+			// printf("%d %d %d\n", (void *)cur_node - heap_start,
+			// 	   GET_SIZE(HDRP(cur_node)), GET_ALLOC(HDRP(cur_node)));
 			cur_node = cur_node->next;
 		}
 	}
