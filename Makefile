@@ -28,3 +28,8 @@ clean:
 	rm -f *~ *.o mdriver
 
 
+
+OBJS2 = mdriver.o mm2.o memlib.o fsecs.o fcyc.o clock.o ftimer.o
+mdriver2: $(OBJS2)
+	$(CC) $(CFLAGS) -o mdriver2 $(OBJS2)
+mm2.o: mm2.c mm.h memlib.h
