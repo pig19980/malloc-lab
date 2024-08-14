@@ -73,32 +73,25 @@ void add_node(void *, int);
 #define GET_CIDX(p) (GET(p) >> 1)
 #define GET_ALLOC(p) (GET(p) & 0x1)
 
-// about block
-#define HDRP(bp) ((void *)(bp)-DSIZE)
-#define OFFSET(bp) (HDRP(bp) - heap_start)
-#define IS_RIGHT(bp) ((OFFSET(bp)) & (1 << (GET_CIDX(HDRP(bp)) + 4)))
-
-#define LEFT_BP(bp)                                                            \
-	((void *)((unsigned)heap_start +                                           \
-			  ((unsigned)(OFFSET(bp)) & ~(1 << (GET_CIDX(HDRP(bp)) + 4))) +    \
-			  DSIZE))
-#define RIGHT_BP(bp)                                                           \
-	((void *)((unsigned)heap_start +                                           \
-			  ((unsigned)(OFFSET(bp)) | (1 << (GET_CIDX(HDRP(bp))) + 4)) +     \
-			  DSIZE))
-
 #define CLASS_N 20
 #define CLASS_SIZE(idx) (1 << (idx + 4))
 
-// about linked list node
-#define PREV(bp) (((node *)(bp))->prev)
-#define NEXT(bp) (((node *)(bp))->next)
+// about block
+#define HDRP(bp) ((void *)(bp)-DSIZE)
+#define OFFSET(bp) (HDRP(bp) - heap_start)
+#define IS_RIGHT(bp) ((OFFSET(bp)) & (CLASS_SIZE(GET_CIDX(HDRP(bp)))))
+
+#define LEFT_BP(bp)                                                            \
+	((void *)((unsigned)heap_start + DSIZE +                                   \
+			  ((unsigned)(OFFSET(bp)) & ~(CLASS_SIZE(GET_CIDX(HDRP(bp)))))))
+#define RIGHT_BP(bp)                                                           \
+	((void *)((unsigned)heap_start + DSIZE +                                   \
+			  ((unsigned)(OFFSET(bp)) | (CLASS_SIZE(GET_CIDX(HDRP(bp)))))))
 
 static node class_start[CLASS_N];
 static node _NIL = {NULL, NULL};
 static node *NIL = &_NIL;
 static void *heap_start;
-static int max_cidx;
 
 /*
  * mm_init - initialize the malloc package.
@@ -107,13 +100,10 @@ int mm_init(void) {
 	for (int i = 0; i < CLASS_N; ++i) {
 		class_start[i].next = NIL;
 	}
-	max_cidx = 8;
-	if ((heap_start = mem_sbrk(CLASS_SIZE(max_cidx))) == (void *)-1) {
+	if ((heap_start = mem_sbrk(0)) == (void *)-1) {
 		return -1;
 	}
-	PUT(heap_start, PACK(max_cidx, FREE));
-	add_node(heap_start + 8, max_cidx);
-
+	// printf("\n%p init_done\n\n", heap_start);
 	return 0;
 }
 
@@ -123,22 +113,30 @@ int mm_init(void) {
  */
 void *mm_malloc(size_t size) {
 	int cidx, pcidx;
-	void *empty_bp;
+	void *empty_bp, *heap_end;
 	cidx = get_class_idx(size + 8);
+
+	// printf("malloc %d %d\n", size, cidx);
+
 	empty_bp = find_match_bp(cidx);
 	if (!empty_bp) {
-		while (true) {
-			if ((empty_bp = mem_sbrk(CLASS_SIZE(max_cidx))) == (void *)-1) {
-				return NULL;
-			}
-			PUT(empty_bp, PACK(max_cidx, FREE));
-			add_node(empty_bp + 8, max_cidx);
-			empty_bp += 8;
-			max_cidx++;
-			if (max_cidx > cidx) {
-				break;
+		heap_end = mem_sbrk(0);
+		for (int ccidx = 0; ccidx < cidx; ccidx++) {
+			if ((heap_end - heap_start) & CLASS_SIZE(ccidx)) {
+				if ((heap_end = mem_sbrk(CLASS_SIZE(ccidx))) == (void *)-1) {
+					return NULL;
+				}
+				PUT(heap_end, PACK(ccidx, FREE));
+				add_node(heap_end + DSIZE, ccidx);
+				heap_end = mem_sbrk(0);
 			}
 		}
+		if ((heap_end = mem_sbrk(CLASS_SIZE(cidx))) == (void *)-1) {
+			return NULL;
+		}
+		PUT(heap_end, PACK(cidx, FREE));
+		add_node(heap_end + DSIZE, cidx);
+		empty_bp = heap_end + DSIZE;
 	}
 	pcidx = GET_CIDX(HDRP(empty_bp));
 	erase_node(empty_bp);
@@ -149,6 +147,7 @@ void *mm_malloc(size_t size) {
 		add_node(RIGHT_BP(empty_bp), pcidx);
 	}
 	PUT(HDRP(empty_bp), PACK(cidx, ALLOC));
+	// mem_check();
 	return empty_bp;
 }
 
@@ -159,11 +158,18 @@ void mm_free(void *ptr) {
 	int cidx;
 	void *left_bp, *right_bp;
 	cidx = GET_CIDX(HDRP(ptr));
+
+	// printf("free %d %d\n", OFFSET(ptr), cidx);
+
 	PUT(HDRP(ptr), PACK(cidx, FREE));
 	add_node(ptr, cidx);
-	while (cidx < max_cidx) {
+	while (true) {
 		left_bp = LEFT_BP(ptr);
 		right_bp = RIGHT_BP(ptr);
+		// if pointer is become too big, break
+		if (right_bp - DSIZE >= mem_sbrk(0)) {
+			break;
+		}
 		// at least, one of both is FREE
 		if (GET(HDRP(left_bp)) != GET(HDRP(right_bp))) {
 			break;
@@ -175,7 +181,7 @@ void mm_free(void *ptr) {
 		PUT(HDRP(left_bp), PACK(cidx, FREE));
 		add_node(left_bp, cidx);
 	}
-
+	// mem_check();
 	return;
 }
 
@@ -184,7 +190,7 @@ void mm_free(void *ptr) {
  */
 void *mm_realloc(void *old_bp, size_t size) {
 	void *new_bp = mm_malloc(size);
-	int new_size = CLASS_SIZE(GET_CIDX(HDRP(new_bp)));
+	// int new_size = CLASS_SIZE(GET_CIDX(HDRP(new_bp)));
 	int old_size = CLASS_SIZE(GET_CIDX(HDRP(old_bp)));
 	memcpy(new_bp, old_bp, old_size - DSIZE);
 	mm_free(old_bp);
@@ -204,8 +210,9 @@ void *find_match_bp(size_t cidx) {
 }
 
 void erase_node(void *bp) {
-	PREV(bp)->next = NEXT(bp);
-	NEXT(bp)->prev = PREV(bp);
+	node *cur_node = bp;
+	cur_node->prev->next = cur_node->next;
+	cur_node->next->prev = cur_node->prev;
 }
 
 void add_node(void *bp, int cidx) {
@@ -219,23 +226,23 @@ void add_node(void *bp, int cidx) {
 
 void mem_check() {
 	void *cur_bp = heap_start + DSIZE;
-	void *heap_end = heap_start + CLASS_SIZE(max_cidx);
+	void *heap_end = mem_sbrk(0);
 	node *cur_node;
-	printf("\nblock check\n");
+	// printf("total size %d\n", heap_end - heap_start);
+	// printf("\nblock check\n");
 	while (cur_bp != heap_end + DSIZE) {
-		printf("%d %d %d %d\n", OFFSET(cur_bp), GET_CIDX(HDRP(cur_bp)),
-			   CLASS_SIZE(GET_CIDX(HDRP(cur_bp))), GET_ALLOC(HDRP(cur_bp)));
+		// printf("%d %d %d %d\n", OFFSET(cur_bp), GET_CIDX(HDRP(cur_bp)),
+		// 	   CLASS_SIZE(GET_CIDX(HDRP(cur_bp))), GET_ALLOC(HDRP(cur_bp)));
 		cur_bp += CLASS_SIZE(GET_CIDX(HDRP(cur_bp)));
 		assert(cur_bp <= heap_end + DSIZE);
 	}
-	printf("free check\n");
+	// printf("free check\n");
 	for (int i = 0; i < CLASS_N; ++i) {
-		printf("class %d min_size %d\n", i, CLASS_SIZE(i));
+		// printf("class %d min_size %d\n", i, CLASS_SIZE(i));
 		cur_node = (class_start + i)->next;
 		while (cur_node != NIL) {
 			assert(GET_ALLOC(HDRP(cur_node)) == FREE);
-			printf("%d %d %d\n", OFFSET(cur_node), GET_CIDX(HDRP(cur_node)),
-				   GET_ALLOC(HDRP(cur_node)));
+			assert(GET_CIDX(HDRP(cur_node)) == i);
 			cur_node = cur_node->next;
 		}
 	}
