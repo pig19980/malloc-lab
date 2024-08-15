@@ -34,3 +34,10 @@ OBJS2 = mdriver.o mm2.o memlib.o fsecs.o fcyc.o clock.o ftimer.o
 mdriver2: $(OBJS2)
 	$(CC) $(CFLAGS) -o mdriver2 $(OBJS2)
 mm2.o: mm2.c mm.h memlib.h
+
+
+OBJS3 = mdriver.o mm3.o rbtree.o memlib.o fsecs.o fcyc.o clock.o ftimer.o
+mdriver3: $(OBJS3)
+	$(CC) $(CFLAGS) -o mdriver3 $(OBJS3)
+mm3.o: mm3.c mm.h memlib.h rbtree.h
+rbtree.o: rbtree.c rbtree.h
